@@ -178,12 +178,20 @@ BASE_TEMPLATE = """
     }
     h1 { font-size: 22px; line-height: 1.2; margin: 0; letter-spacing: 0; }
     .subtitle { color: var(--muted); margin: 4px 0 0; font-size: 14px; }
-    .status-pill {
-      display: inline-flex; align-items: center; gap: 8px; padding: 8px 10px;
-      border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--muted);
-      font-size: 13px; white-space: nowrap;
+    .header-actions { display: flex; align-items: center; gap: 10px; }
+    .flow-tabs {
+      display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;
+      margin-top: 20px; padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: #eef2f5;
     }
+    .flow-tab {
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      min-height: 42px; border-radius: 7px; color: #52606d; text-decoration: none; font-size: 14px; font-weight: 700;
+      border: 1px solid transparent;
+    }
+    .flow-tab.active { background: #fff; color: var(--accent-strong); border-color: #c8e3df; box-shadow: 0 6px 18px rgba(31, 41, 51, .07); }
+    .flow-tab.disabled { opacity: .48; pointer-events: none; }
     .grid { display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: 20px; margin-top: 22px; align-items: start; }
+    .single { max-width: 860px; margin: 22px auto 0; }
     .panel {
       background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow);
     }
@@ -199,9 +207,14 @@ BASE_TEMPLATE = """
     .step strong { display: block; font-size: 13px; }
     .step span { color: var(--muted); font-size: 12px; line-height: 1.35; }
     .upload-box {
-      border: 1px dashed #9aa8b8; border-radius: 8px; padding: 18px; background: #fbfcfd;
+      border: 1px dashed #9aa8b8; border-radius: 8px; padding: 28px; background: #fbfcfd;
+      display: grid; gap: 18px; min-height: 210px; align-content: center;
     }
-    input[type=file] { width: 100%; font-size: 14px; color: var(--muted); }
+    .file-prompt { display: flex; gap: 14px; align-items: center; }
+    .file-prompt-icon { width: 44px; height: 44px; display: grid; place-items: center; color: var(--accent); background: var(--soft); border-radius: 8px; border: 1px solid #c8e3df; }
+    .file-prompt strong { display: block; font-size: 16px; }
+    .file-prompt span { color: var(--muted); font-size: 13px; }
+    input[type=file] { width: 100%; font-size: 14px; color: var(--muted); padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
     input[type=text], input[type=password] {
       width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #fff;
       padding: 11px 12px; font-size: 14px; color: var(--ink); outline: none;
@@ -209,7 +222,7 @@ BASE_TEMPLATE = """
     input[type=text]:focus, input[type=password]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(15, 118, 110, .12); }
     label { display: grid; gap: 7px; color: #344054; font-size: 13px; font-weight: 650; }
     .form-stack { display: grid; gap: 14px; }
-    .login-shell { min-height: calc(100vh - 76px); display: grid; place-items: center; }
+    .login-shell { min-height: calc(100vh - 56px); display: grid; place-items: center; }
     .login-panel { width: min(420px, 100%); }
     .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
     .button {
@@ -235,33 +248,46 @@ BASE_TEMPLATE = """
     .empty { padding: 52px 18px; text-align: center; color: var(--muted); }
     .result-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
     .result-list .metric strong { font-size: 18px; }
+    .result-hero { display: flex; justify-content: space-between; gap: 18px; align-items: center; margin-bottom: 16px; padding: 16px; border: 1px solid #c8e3df; border-radius: 8px; background: var(--soft); }
+    .result-hero strong { display: block; font-size: 18px; }
+    .result-hero span { color: var(--muted); font-size: 13px; }
     .notice { color: var(--muted); font-size: 13px; line-height: 1.5; margin-top: 12px; }
     svg { width: 18px; height: 18px; stroke-width: 2; }
     @media (max-width: 900px) {
       .grid { grid-template-columns: 1fr; }
       .topbar { align-items: flex-start; flex-direction: column; }
-      .metrics, .result-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .metrics, .result-list, .flow-tabs { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
   <div class="shell">
+    {% if show_header %}
     <header class="topbar">
       <div class="brand">
         <div class="brand-mark">{{ icon("workflow")|safe }}</div>
         <div>
           <h1>local.ch to Pipedrive</h1>
-          <p class="subtitle">Transform scraper exports, review V3, then send the workbook to Pipedrive.</p>
+          <p class="subtitle">Upload, review, and send cleaned leads to Pipedrive.</p>
         </div>
       </div>
-      <div class="status-pill">{{ icon("key")|safe }} PIPEDRIVE_API_TOKEN {{ "set" if token_present else "missing" }}</div>
-      {% if authenticated %}
-        <a class="button" href="{{ url_for('logout') }}">{{ icon("lock")|safe }} Sign out</a>
-      {% endif %}
+      <div class="header-actions">
+        {% if authenticated %}
+          <a class="button" href="{{ url_for('logout') }}">{{ icon("lock")|safe }} Sign out</a>
+        {% endif %}
+      </div>
     </header>
+    {% endif %}
     {% with messages = get_flashed_messages() %}
       {% for message in messages %}<div class="flash">{{ message }}</div>{% endfor %}
     {% endwith %}
+    {% if active_step %}
+      <nav class="flow-tabs" aria-label="Progress">
+        <a class="flow-tab {{ 'active' if active_step == 'upload' else '' }}" href="{{ url_for('index') }}">{{ icon("upload")|safe }} Upload</a>
+        <a class="flow-tab {{ 'active' if active_step == 'preview' else '' }} {{ 'disabled' if not current_job else '' }}" href="{{ url_for('preview', job_id=current_job) if current_job else '#' }}">{{ icon("table")|safe }} Preview V3</a>
+        <a class="flow-tab {{ 'active' if active_step == 'import' else '' }} {{ 'disabled' if not current_job else '' }}" href="{{ url_for('preview', job_id=current_job) if current_job else '#' }}">{{ icon("send")|safe }} Import</a>
+      </nav>
+    {% endif %}
     {{ body|safe }}
   </div>
 </body>
@@ -287,12 +313,14 @@ def icon(name: str) -> str:
 app.jinja_env.globals["icon"] = icon
 
 
-def render_page(body: str) -> str:
+def render_page(body: str, *, active_step: str | None = None, current_job: str | None = None, show_header: bool = True) -> str:
     return render_template_string(
         BASE_TEMPLATE,
         body=body,
-        token_present=bool(os.getenv("PIPEDRIVE_API_TOKEN")),
         authenticated=is_authenticated(),
+        active_step=active_step,
+        current_job=current_job,
+        show_header=show_header,
     )
 
 
@@ -302,7 +330,7 @@ def require_login():
         return None
     if not auth_configured():
         if request.endpoint not in {"index"}:
-            flash("APP_USERNAME and APP_PASSWORD are not configured. Add them to the environment before using the app.")
+            flash("Sign-in is not set up yet.")
             return redirect(url_for("index"))
         return None
     if not is_authenticated():
@@ -313,7 +341,7 @@ def require_login():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if not auth_configured():
-        flash("APP_USERNAME and APP_PASSWORD are not configured yet.")
+        flash("Sign-in is not set up yet.")
         return redirect(url_for("index"))
 
     if request.method == "POST":
@@ -329,20 +357,19 @@ def login():
         """
         <main class="login-shell">
           <section class="panel login-panel">
-            <div class="panel-header"><h2 class="panel-title">Sign in</h2></div>
+            <div class="panel-header"><h2 class="panel-title">Welcome back</h2></div>
             <div class="panel-body">
               <form class="form-stack" method="post">
                 <label>Username<input type="text" name="username" autocomplete="username" required autofocus></label>
                 <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
                 <button class="button primary" type="submit">{{ icon("lock")|safe }} Sign in</button>
               </form>
-              <p class="notice">Credentials are read from <code>APP_USERNAME</code> and <code>APP_PASSWORD</code>.</p>
             </div>
           </section>
         </main>
         """
     )
-    return render_page(body)
+    return render_page(body, show_header=False)
 
 
 @app.get("/logout")
@@ -355,34 +382,29 @@ def logout():
 def index() -> str:
     body = render_template_string(
         """
-        <main class="grid">
+        <main class="single">
           <section class="panel">
-            <div class="panel-header"><h2 class="panel-title">Pipeline</h2></div>
-            <div class="panel-body">
-              <div class="steps">
-                <div class="step"><div class="step-icon">{{ icon("upload")|safe }}</div><div><strong>Upload source</strong><span>XLSX, XLS, or CSV scraper export.</span></div></div>
-                <div class="step"><div class="step-icon">{{ icon("workflow")|safe }}</div><div><strong>Transform</strong><span>Generate deterministic V2 and V3 files.</span></div></div>
-                <div class="step"><div class="step-icon">{{ icon("table")|safe }}</div><div><strong>Preview V3</strong><span>Check columns and first rows before upload.</span></div></div>
-                <div class="step"><div class="step-icon">{{ icon("send")|safe }}</div><div><strong>Import</strong><span>Dry-run first, then upload to Pipedrive.</span></div></div>
-              </div>
-            </div>
-          </section>
-          <section class="panel">
-            <div class="panel-header"><h2 class="panel-title">Source file</h2></div>
+            <div class="panel-header"><h2 class="panel-title">Upload source file</h2></div>
             <div class="panel-body">
               <form class="upload-box" action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data">
+                <div class="file-prompt">
+                  <div class="file-prompt-icon">{{ icon("file")|safe }}</div>
+                  <div>
+                    <strong>Select the local.ch export</strong>
+                    <span>Use the raw XLSX or CSV file. The app will prepare the V3 preview automatically.</span>
+                  </div>
+                </div>
                 <input type="file" name="source_file" accept=".xlsx,.xls,.csv" required>
                 <div class="actions">
-                  <button class="button primary" type="submit">{{ icon("play")|safe }} Transform and preview</button>
+                  <button class="button primary" type="submit">{{ icon("play")|safe }} Continue to preview</button>
                 </div>
               </form>
-              <p class="notice">The app stores generated files under <code>web_storage/</code>. Pipedrive credentials are read from <code>.env</code> or <code>importer/.env</code>.</p>
             </div>
           </section>
         </main>
         """
     )
-    return render_page(body)
+    return render_page(body, active_step="upload")
 
 
 @app.post("/upload")
@@ -427,12 +449,12 @@ def preview(job_id: str) -> str:
         """
         <main class="grid">
           <section class="panel">
-            <div class="panel-header"><h2 class="panel-title">Generated files</h2></div>
+            <div class="panel-header"><h2 class="panel-title">Ready to review</h2></div>
             <div class="panel-body">
               <div class="metrics">
                 <div class="metric"><span>Rows</span><strong>{{ preview.row_count }}</strong></div>
                 <div class="metric"><span>Columns</span><strong>{{ preview.column_count }}</strong></div>
-                <div class="metric"><span>Preview</span><strong>{{ preview.preview_count }}</strong></div>
+                <div class="metric"><span>Shown</span><strong>{{ preview.preview_count }}</strong></div>
                 <div class="metric"><span>Status</span><strong>Ready</strong></div>
               </div>
               <div class="actions">
@@ -442,10 +464,10 @@ def preview(job_id: str) -> str:
                 <a class="button" href="{{ url_for('download', job_id=job_id, version='V3', extension='csv') }}">{{ icon("download")|safe }} V3 CSV</a>
               </div>
               <form class="actions" action="{{ url_for('run_import', job_id=job_id) }}" method="post">
-                <button class="button" type="submit" name="mode" value="dry-run">{{ icon("play")|safe }} Dry run</button>
+                <button class="button" type="submit" name="mode" value="dry-run">{{ icon("play")|safe }} Test import</button>
                 <button class="button primary" type="submit" name="mode" value="upload">{{ icon("send")|safe }} Upload to Pipedrive</button>
               </form>
-              <p class="notice">Run a dry-run to verify field mapping without API writes. Real upload creates or updates organizations and persons, then creates deals.</p>
+              <p class="notice">Review the table, then test the import or upload it to Pipedrive.</p>
             </div>
           </section>
           <section class="panel">
@@ -466,7 +488,7 @@ def preview(job_id: str) -> str:
         preview=preview_data,
         job_id=job_id,
     )
-    return render_page(body)
+    return render_page(body, active_step="preview", current_job=job_id)
 
 
 @app.get("/jobs/<job_id>/download/<version>.<extension>")
@@ -494,24 +516,31 @@ def run_import(job_id: str) -> str:
         """
         <main class="grid">
           <section class="panel">
-            <div class="panel-header"><h2 class="panel-title">{{ "Dry-run result" if result.dry_run else "Upload result" }}</h2></div>
+            <div class="panel-header"><h2 class="panel-title">{{ "Test result" if result.dry_run else "Upload complete" }}</h2></div>
             <div class="panel-body">
+              <div class="result-hero">
+                <div>
+                  <strong>{{ "No records were sent" if result.dry_run else "Pipedrive was updated" }}</strong>
+                  <span>{{ "This test checked the file and counted what would be sent." if result.dry_run else "The file was processed and sent to Pipedrive." }}</span>
+                </div>
+                <div class="file-prompt-icon">{{ icon("send")|safe }}</div>
+              </div>
               <div class="result-list">
                 <div class="metric"><span>Rows</span><strong>{{ result.rows }}</strong></div>
-                <div class="metric"><span>Organizations created</span><strong>{{ result.organizations_created }}</strong></div>
-                <div class="metric"><span>Organizations updated</span><strong>{{ result.organizations_updated }}</strong></div>
-                <div class="metric"><span>Persons created</span><strong>{{ result.persons_created }}</strong></div>
-                <div class="metric"><span>Persons updated</span><strong>{{ result.persons_updated }}</strong></div>
-                <div class="metric"><span>Deals created</span><strong>{{ result.deals_created }}</strong></div>
-                <div class="metric"><span>Failed rows</span><strong>{{ result.failed_rows }}</strong></div>
-                <div class="metric"><span>Unmapped columns</span><strong>{{ result.unmapped_columns|length }}</strong></div>
-                <div class="metric"><span>Skipped fields</span><strong>{{ result.skipped_fields|length }}</strong></div>
+                <div class="metric"><span>Companies added</span><strong>{{ result.organizations_created }}</strong></div>
+                <div class="metric"><span>Companies updated</span><strong>{{ result.organizations_updated }}</strong></div>
+                <div class="metric"><span>People added</span><strong>{{ result.persons_created }}</strong></div>
+                <div class="metric"><span>People updated</span><strong>{{ result.persons_updated }}</strong></div>
+                <div class="metric"><span>Deals added</span><strong>{{ result.deals_created }}</strong></div>
+                <div class="metric"><span>Rows with issues</span><strong>{{ result.failed_rows }}</strong></div>
+                <div class="metric"><span>Ignored columns</span><strong>{{ result.unmapped_columns|length }}</strong></div>
+                <div class="metric"><span>Skipped values</span><strong>{{ result.skipped_fields|length }}</strong></div>
               </div>
               {% if result.row_errors %}
-                <p class="notice"><strong>Row errors:</strong> {{ result.row_errors|join(" | ") }}</p>
+                <p class="notice"><strong>Rows needing attention:</strong> {{ result.row_errors|join(" | ") }}</p>
               {% endif %}
               {% if result.skipped_fields %}
-                <p class="notice"><strong>Skipped fields:</strong> {{ result.skipped_fields|join(", ") }}</p>
+                <p class="notice"><strong>Skipped values:</strong> {{ result.skipped_fields|join(", ") }}</p>
               {% endif %}
               <div class="actions">
                 <a class="button" href="{{ url_for('preview', job_id=job_id) }}">{{ icon("table")|safe }} Back to preview</a>
@@ -542,7 +571,7 @@ def run_import(job_id: str) -> str:
         preview=preview_data,
         job_id=job_id,
     )
-    return render_page(body)
+    return render_page(body, active_step="import", current_job=job_id)
 
 
 if __name__ == "__main__":
