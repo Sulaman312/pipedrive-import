@@ -63,14 +63,15 @@ def find_job_file(job_id: str, suffix: str) -> Path:
     return matches[0]
 
 
-def build_preview(path: Path, limit: int = 25) -> dict[str, Any]:
+def build_preview(path: Path, limit: int | None = None) -> dict[str, Any]:
     df = pd.read_excel(path, dtype=str).fillna("ND")
+    visible_df = df if limit is None else df.head(limit)
     return {
-        "rows": df.head(limit).to_dict(orient="records"),
+        "rows": visible_df.to_dict(orient="records"),
         "columns": list(df.columns),
         "row_count": len(df),
         "column_count": len(df.columns),
-        "preview_count": min(limit, len(df)),
+        "preview_count": len(visible_df),
     }
 
 
@@ -191,6 +192,7 @@ BASE_TEMPLATE = """
     .flow-tab.active { background: #fff; color: var(--accent-strong); border-color: #c8e3df; box-shadow: 0 6px 18px rgba(31, 41, 51, .07); }
     .flow-tab.disabled { opacity: .48; pointer-events: none; }
     .grid { display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: 20px; margin-top: 22px; align-items: start; }
+    .full-width { margin-top: 22px; }
     .single { max-width: 860px; margin: 22px auto 0; }
     .panel {
       background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow);
@@ -240,7 +242,7 @@ BASE_TEMPLATE = """
     .metric { border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: #fbfcfd; }
     .metric span { color: var(--muted); font-size: 12px; }
     .metric strong { display: block; margin-top: 4px; font-size: 20px; }
-    .table-wrap { overflow: auto; border-top: 1px solid var(--line); max-height: 560px; }
+    .table-wrap { overflow: auto; max-height: 640px; }
     table { border-collapse: collapse; width: 100%; min-width: 1320px; font-size: 12px; }
     th, td { border-bottom: 1px solid var(--line); padding: 9px 10px; text-align: left; vertical-align: top; white-space: nowrap; }
     th { position: sticky; top: 0; background: #f2f5f8; z-index: 1; color: #344054; font-weight: 700; }
@@ -251,6 +253,9 @@ BASE_TEMPLATE = """
     .result-hero { display: flex; justify-content: space-between; gap: 18px; align-items: center; margin-bottom: 16px; padding: 16px; border: 1px solid #c8e3df; border-radius: 8px; background: var(--soft); }
     .result-hero strong { display: block; font-size: 18px; }
     .result-hero span { color: var(--muted); font-size: 13px; }
+    .table-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; padding: 14px; border-top: 1px solid var(--line); background: #fbfcfd; }
+    .table-actions form { margin: 0; display: inline-flex; }
+    .inline-error { margin: 14px; padding: 11px 12px; border-radius: 8px; border: 1px solid #f0b9b5; color: var(--danger); background: #fff4f2; font-size: 13px; }
     .notice { color: var(--muted); font-size: 13px; line-height: 1.5; margin-top: 12px; }
     svg { width: 18px; height: 18px; stroke-width: 2; }
     @media (max-width: 900px) {
@@ -447,31 +452,8 @@ def preview(job_id: str) -> str:
 
     body = render_template_string(
         """
-        <main class="grid">
+        <main class="full-width">
           <section class="panel">
-            <div class="panel-header"><h2 class="panel-title">Ready to review</h2></div>
-            <div class="panel-body">
-              <div class="metrics">
-                <div class="metric"><span>Rows</span><strong>{{ preview.row_count }}</strong></div>
-                <div class="metric"><span>Columns</span><strong>{{ preview.column_count }}</strong></div>
-                <div class="metric"><span>Shown</span><strong>{{ preview.preview_count }}</strong></div>
-                <div class="metric"><span>Status</span><strong>Ready</strong></div>
-              </div>
-              <div class="actions">
-                <a class="button" href="{{ url_for('download', job_id=job_id, version='V2', extension='xlsx') }}">{{ icon("download")|safe }} V2 XLSX</a>
-                <a class="button" href="{{ url_for('download', job_id=job_id, version='V2', extension='csv') }}">{{ icon("download")|safe }} V2 CSV</a>
-                <a class="button" href="{{ url_for('download', job_id=job_id, version='V3', extension='xlsx') }}">{{ icon("download")|safe }} V3 XLSX</a>
-                <a class="button" href="{{ url_for('download', job_id=job_id, version='V3', extension='csv') }}">{{ icon("download")|safe }} V3 CSV</a>
-              </div>
-              <form class="actions" action="{{ url_for('run_import', job_id=job_id) }}" method="post">
-                <button class="button" type="submit" name="mode" value="dry-run">{{ icon("play")|safe }} Test import</button>
-                <button class="button primary" type="submit" name="mode" value="upload">{{ icon("send")|safe }} Upload to Pipedrive</button>
-              </form>
-              <p class="notice">Review the table, then test the import or upload it to Pipedrive.</p>
-            </div>
-          </section>
-          <section class="panel">
-            <div class="panel-header"><h2 class="panel-title">V3 preview</h2></div>
             <div class="table-wrap">
               <table>
                 <thead><tr>{% for column in preview.columns %}<th>{{ column }}</th>{% endfor %}</tr></thead>
@@ -481,6 +463,16 @@ def preview(job_id: str) -> str:
                   {% endfor %}
                 </tbody>
               </table>
+            </div>
+            <div class="table-actions">
+              <a class="button" href="{{ url_for('download', job_id=job_id, version='V2', extension='xlsx') }}">{{ icon("download")|safe }} Download V2</a>
+              <a class="button" href="{{ url_for('download', job_id=job_id, version='V3', extension='xlsx') }}">{{ icon("download")|safe }} Download V3</a>
+              <form action="{{ url_for('run_import', job_id=job_id) }}" method="post">
+                <button class="button" type="submit" name="mode" value="dry-run">{{ icon("play")|safe }} Test import</button>
+              </form>
+              <form action="{{ url_for('run_import', job_id=job_id) }}" method="post">
+                <button class="button primary" type="submit" name="mode" value="upload">{{ icon("send")|safe }} Upload to Pipedrive</button>
+              </form>
             </div>
           </section>
         </main>
@@ -507,53 +499,20 @@ def run_import(job_id: str) -> str:
     try:
         v3_xlsx = find_job_file(job_id, "V3.xlsx")
         result = import_v3(v3_xlsx, dry_run=dry_run)
-        preview_data = build_preview(v3_xlsx, limit=10)
+        preview_data = build_preview(v3_xlsx)
     except Exception as exc:
         flash(f"Import failed: {exc}")
         return redirect(url_for("preview", job_id=job_id))
 
     body = render_template_string(
         """
-        <main class="grid">
+        <main class="full-width">
           <section class="panel">
-            <div class="panel-header"><h2 class="panel-title">{{ "Test result" if result.dry_run else "Upload complete" }}</h2></div>
-            <div class="panel-body">
-              <div class="result-hero">
-                <div>
-                  <strong>{{ "No records were sent" if result.dry_run else "Pipedrive was updated" }}</strong>
-                  <span>{{ "This test checked the file and counted what would be sent." if result.dry_run else "The file was processed and sent to Pipedrive." }}</span>
-                </div>
-                <div class="file-prompt-icon">{{ icon("send")|safe }}</div>
+            {% if result.failed_rows or result.row_errors %}
+              <div class="inline-error">
+                Some rows could not be processed. {{ result.row_errors|join(" | ") }}
               </div>
-              <div class="result-list">
-                <div class="metric"><span>Rows</span><strong>{{ result.rows }}</strong></div>
-                <div class="metric"><span>Companies added</span><strong>{{ result.organizations_created }}</strong></div>
-                <div class="metric"><span>Companies updated</span><strong>{{ result.organizations_updated }}</strong></div>
-                <div class="metric"><span>People added</span><strong>{{ result.persons_created }}</strong></div>
-                <div class="metric"><span>People updated</span><strong>{{ result.persons_updated }}</strong></div>
-                <div class="metric"><span>Deals added</span><strong>{{ result.deals_created }}</strong></div>
-                <div class="metric"><span>Rows with issues</span><strong>{{ result.failed_rows }}</strong></div>
-                <div class="metric"><span>Ignored columns</span><strong>{{ result.unmapped_columns|length }}</strong></div>
-                <div class="metric"><span>Skipped values</span><strong>{{ result.skipped_fields|length }}</strong></div>
-              </div>
-              {% if result.row_errors %}
-                <p class="notice"><strong>Rows needing attention:</strong> {{ result.row_errors|join(" | ") }}</p>
-              {% endif %}
-              {% if result.skipped_fields %}
-                <p class="notice"><strong>Skipped values:</strong> {{ result.skipped_fields|join(", ") }}</p>
-              {% endif %}
-              <div class="actions">
-                <a class="button" href="{{ url_for('preview', job_id=job_id) }}">{{ icon("table")|safe }} Back to preview</a>
-                {% if result.dry_run %}
-                  <form action="{{ url_for('run_import', job_id=job_id) }}" method="post">
-                    <button class="button primary" type="submit" name="mode" value="upload">{{ icon("send")|safe }} Upload to Pipedrive</button>
-                  </form>
-                {% endif %}
-              </div>
-            </div>
-          </section>
-          <section class="panel">
-            <div class="panel-header"><h2 class="panel-title">V3 sample</h2></div>
+            {% endif %}
             <div class="table-wrap">
               <table>
                 <thead><tr>{% for column in preview.columns %}<th>{{ column }}</th>{% endfor %}</tr></thead>
@@ -563,6 +522,16 @@ def run_import(job_id: str) -> str:
                   {% endfor %}
                 </tbody>
               </table>
+            </div>
+            <div class="table-actions">
+              <a class="button" href="{{ url_for('download', job_id=job_id, version='V2', extension='xlsx') }}">{{ icon("download")|safe }} Download V2</a>
+              <a class="button" href="{{ url_for('download', job_id=job_id, version='V3', extension='xlsx') }}">{{ icon("download")|safe }} Download V3</a>
+              <a class="button" href="{{ url_for('preview', job_id=job_id) }}">{{ icon("table")|safe }} Back to preview</a>
+              {% if result.dry_run %}
+                <form action="{{ url_for('run_import', job_id=job_id) }}" method="post">
+                  <button class="button primary" type="submit" name="mode" value="upload">{{ icon("send")|safe }} Upload to Pipedrive</button>
+                </form>
+              {% endif %}
             </div>
           </section>
         </main>
