@@ -124,9 +124,19 @@ def import_v3(path: Path, dry_run: bool) -> dict[str, Any]:
             logger.exception(message)
 
     pipedrive_importer.log_summary(path, stats, logger)
+    success = stats.failed_rows == 0
     return {
+        "success": success,
+        "message": (
+            "Test completed" if dry_run and success
+            else "Test completed with issues" if dry_run
+            else "Upload completed" if success
+            else "Upload completed with issues"
+        ),
         "dry_run": dry_run,
         "rows": stats.rows,
+        "created_total": stats.organizations_created + stats.persons_created + stats.deals_created,
+        "updated_total": stats.organizations_updated + stats.persons_updated,
         "organizations_created": stats.organizations_created,
         "organizations_updated": stats.organizations_updated,
         "persons_created": stats.persons_created,
@@ -256,12 +266,28 @@ BASE_TEMPLATE = """
     .table-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; padding: 14px; border-top: 1px solid var(--line); background: #fbfcfd; }
     .table-actions form { margin: 0; display: inline-flex; }
     .inline-error { margin: 14px; padding: 11px 12px; border-radius: 8px; border: 1px solid #f0b9b5; color: var(--danger); background: #fff4f2; font-size: 13px; }
+    .result-summary {
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 14px; border-top: 1px solid var(--line); background: #fbfcfd;
+    }
+    .result-status { display: flex; align-items: center; gap: 10px; }
+    .result-dot { width: 10px; height: 10px; border-radius: 99px; background: var(--accent); }
+    .result-dot.failed { background: var(--danger); }
+    .result-status strong { display: block; font-size: 14px; }
+    .result-status span, .result-detail { color: var(--muted); font-size: 13px; }
+    .mini-stats {
+      display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px;
+      padding: 14px; border-top: 1px solid var(--line); background: #fff;
+    }
+    .mini-stat { border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: #fbfcfd; }
+    .mini-stat span { color: var(--muted); font-size: 12px; }
+    .mini-stat strong { display: block; margin-top: 4px; font-size: 20px; }
     .notice { color: var(--muted); font-size: 13px; line-height: 1.5; margin-top: 12px; }
     svg { width: 18px; height: 18px; stroke-width: 2; }
     @media (max-width: 900px) {
       .grid { grid-template-columns: 1fr; }
       .topbar { align-items: flex-start; flex-direction: column; }
-      .metrics, .result-list, .flow-tabs { grid-template-columns: 1fr; }
+      .metrics, .result-list, .flow-tabs, .mini-stats { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -498,11 +524,27 @@ def run_import(job_id: str) -> str:
     dry_run = mode != "upload"
     try:
         v3_xlsx = find_job_file(job_id, "V3.xlsx")
-        result = import_v3(v3_xlsx, dry_run=dry_run)
         preview_data = build_preview(v3_xlsx)
+        result = import_v3(v3_xlsx, dry_run=dry_run)
     except Exception as exc:
-        flash(f"Import failed: {exc}")
-        return redirect(url_for("preview", job_id=job_id))
+        try:
+            v3_xlsx = find_job_file(job_id, "V3.xlsx")
+            preview_data = build_preview(v3_xlsx)
+        except Exception:
+            flash(f"Import failed: {exc}")
+            return redirect(url_for("preview", job_id=job_id))
+        result = {
+            "success": False,
+            "message": "Test failed" if dry_run else "Upload failed",
+            "dry_run": dry_run,
+            "rows": preview_data["row_count"],
+            "created_total": 0,
+            "updated_total": 0,
+            "failed_rows": preview_data["row_count"],
+            "row_errors": [str(exc)],
+            "skipped_fields": [],
+            "unmapped_columns": [],
+        }
 
     body = render_template_string(
         """
@@ -522,6 +564,23 @@ def run_import(job_id: str) -> str:
                   {% endfor %}
                 </tbody>
               </table>
+            </div>
+            <div class="result-summary">
+              <div class="result-status">
+                <span class="result-dot {{ '' if result.success else 'failed' }}"></span>
+                <div>
+                  <strong>{{ result.message }}</strong>
+                  <span>{{ "No data was sent to Pipedrive." if result.dry_run else "Pipedrive upload was attempted." }}</span>
+                </div>
+              </div>
+              <div class="result-detail">
+                {{ result.rows }} rows checked · {{ result.failed_rows }} rows with issues
+              </div>
+            </div>
+            <div class="mini-stats">
+              <div class="mini-stat"><span>Rows checked</span><strong>{{ result.rows }}</strong></div>
+              <div class="mini-stat"><span>Created</span><strong>{{ result.created_total }}</strong></div>
+              <div class="mini-stat"><span>Updated</span><strong>{{ result.updated_total }}</strong></div>
             </div>
             <div class="table-actions">
               <a class="button" href="{{ url_for('download', job_id=job_id, version='V2', extension='xlsx') }}">{{ icon("download")|safe }} Download V2</a>
