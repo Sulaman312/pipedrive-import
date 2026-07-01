@@ -33,7 +33,11 @@ def create_app() -> Flask:
 
 
 def _require_login():
-    if request.endpoint in {"auth.login", "login", "webhooks.pipedrive_webhook"}:
+    # Webhook routes must bypass session auth even when endpoint resolution
+    # has not completed yet.
+    if request.path.startswith("/webhooks/"):
+        return None
+    if request.endpoint in {"auth.login", "login"}:
         return None
     if not auth_service.is_configured():
         if request.endpoint not in {"transformations.index", "index"}:

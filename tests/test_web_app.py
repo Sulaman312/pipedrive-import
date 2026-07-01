@@ -61,6 +61,12 @@ class WebAppStructureTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json(), {"error": "Import mode is missing or invalid"})
 
+    def test_webhook_path_bypasses_login_redirect(self):
+        client = self.app.test_client()
+        response = client.post("/webhooks/pipedrive")
+        self.assertNotEqual(response.status_code, 302)
+        self.assertNotIn("/login", response.headers.get("Location", ""))
+
 
 if __name__ == "__main__":
     unittest.main()
