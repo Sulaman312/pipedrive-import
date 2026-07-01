@@ -77,8 +77,8 @@ For each `.xlsx` file in `input/`:
    - field options such as deal labels
 6. Upsert organization by name.
 7. Upsert person by email first, then name.
-8. Create a deal linked to the organization/person IDs when available.
-9. Continue after row-level errors.
+8. Create a deal linked to the organization/person IDs when available, restricted to `PIPEDRIVE_PIPELINE_NAME`.
+9. The CLI continues after row-level errors; the web service stops on systemic Pipedrive API/transport errors.
 10. Move the file to `processed/` unless every row failed, in which case move it to `failed/`.
 
 ## Duplicate Behavior
@@ -87,9 +87,9 @@ The current behavior mimics Pipedrive's "merge data" behavior only partially:
 
 - Organizations are deduplicated by exact organization name search.
 - Persons are deduplicated by email first, then name.
-- Deals are always created as new records.
+- Deals are deduplicated by exact normalized title plus linked organization/person.
 
-This means re-importing the same file should update the existing organization/person but create another deal.
+This means re-importing the same file updates the existing organization/person and skips the existing deal.
 
 ## Important Field Handling
 
@@ -135,15 +135,13 @@ For the generated test workbook, useful search values were:
 
 ## Known Limitations
 
-- Deal deduplication is not implemented yet.
 - Row-level audit CSVs with entity IDs are not implemented yet.
 - The importer skips a mapped custom field if the Pipedrive account does not expose a matching field name/key.
-- Matching for stages, users, and label options is pragmatic: exact normalized match first, then loose containment match.
+- Stage matching is restricted to the configured pipeline. Users and label options use normalized matching with containment fallback.
 - `ND` is currently imported as a normal value because the user indicated it should be preserved.
 
 ## Useful Next Improvements
 
 - Add an import audit CSV with row number, organization ID/action, person ID/action, deal ID/action, and error.
-- Add deal duplicate detection by title plus organization/person.
 - Add configurable matching rules for users, stages, and labels.
 - Add tests for column normalization and value resolution.

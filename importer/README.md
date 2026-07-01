@@ -14,6 +14,8 @@ Edit `.env` and set:
 ```env
 PIPEDRIVE_API_TOKEN=your_token_here
 PIPEDRIVE_BASE_URL=https://api.pipedrive.com/v1
+PIPEDRIVE_PIPELINE_NAME=CAMILLE - PME-KMU
+PIPEDRIVE_FORCE_IPV4=1
 ```
 
 The API token is never hardcoded in the script.
@@ -49,14 +51,17 @@ Normal mode:
 4. Ignores extra unmapped columns while logging them.
 5. Searches organizations by name, updating when found and creating when missing.
 6. Searches persons by email first, then by name, updating when found and creating when missing.
-7. Creates deals linked to the organization and person when IDs are available.
-8. Moves completed files to `processed/` or fully failed files to `failed/`.
+7. Creates deals linked to the organization and person when IDs are available, only in the configured pipeline.
+8. Skips an existing deal with the same title and linked organization/person.
+9. Moves completed files to `processed/` or fully failed files to `failed/`.
 
 For fields that use Pipedrive internal IDs, the importer resolves values dynamically:
 
 - Deal stage: spreadsheet text such as `Prospects` is matched to a Pipedrive stage and sent as `stage_id`.
 - Deal label: spreadsheet text such as `TOP` is matched to a Pipedrive label option and sent as `label`.
 - Organization owner: spreadsheet text such as `Fabien` is matched to a Pipedrive user and sent as `owner_id`.
+
+Stage matching is restricted to `PIPEDRIVE_PIPELINE_NAME`. If a workbook stage is absent from that pipeline, the deal is placed in the pipeline's first stage. The import fails before processing rows if the configured pipeline does not exist.
 
 ## List Pipedrive Fields
 

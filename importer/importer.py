@@ -7,6 +7,7 @@ import csv
 import logging
 import os
 import re
+import socket
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -16,6 +17,7 @@ from typing import Any
 
 import pandas as pd
 import requests
+import urllib3.util.connection as urllib3_connection
 from requests import RequestException
 from dotenv import load_dotenv
 
@@ -41,6 +43,7 @@ FIELD_ENDPOINTS = {
 }
 
 OPTION_DELIMITER_RE = re.compile(r"\s*[,;|]\s*")
+EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 
 class ImporterError(Exception):
@@ -55,10 +58,14 @@ class ImportStats:
     persons_created: int = 0
     persons_updated: int = 0
     deals_created: int = 0
+    deals_skipped: int = 0
     failed_rows: int = 0
     row_errors: list[str] = field(default_factory=list)
     unmapped_columns: list[str] = field(default_factory=list)
     skipped_fields: set[str] = field(default_factory=set)
+    created_organization_ids: list[int] = field(default_factory=list)
+    created_person_ids: list[int] = field(default_factory=list)
+    created_deal_ids: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -67,6 +74,9 @@ class PipedriveMetadata:
     field_options: dict[str, dict[str, dict[str, Any]]]
     stages: dict[str, int]
     users: dict[str, int]
+    target_pipeline_id: int
+    default_stage_id: int
+    target_pipeline_name: str
 
 
 def ensure_directories() -> None:
@@ -164,6 +174,12 @@ class PipedriveClient:
         self.api_token = api_token
         self.base_url = base_url.rstrip("/")
         self.logger = logger
+        if os.getenv("PIPEDRIVE_FORCE_IPV4", "1") == "1":
+            # Some hosts publish IPv6 DNS records without providing working
+            # IPv6 egress. urllib3 otherwise selects IPv6 and never reaches
+            # the healthy IPv4 endpoint.
+            urllib3_connection.allowed_gai_family = lambda: socket.AF_INET
+            self.logger.info("Pipedrive HTTP connections are restricted to IPv4")
         self.session = requests.Session()
 
     def request(
@@ -184,8 +200,13 @@ class PipedriveClient:
                 json=json,
                 timeout=30,
             )
-        except RequestException:
-            raise ImporterError(f"Pipedrive request failed on {method} {path}") from None
+        except RequestException as exc:
+            error_type = exc.__class__.__name__
+            self.logger.error("Pipedrive transport error on %s %s: %s", method, path, error_type)
+            raise ImporterError(
+                f"Pipedrive request failed on {method} {path} ({error_type}). "
+                "Check network access and retry."
+            ) from None
         try:
             payload = response.json()
         except ValueError:
@@ -219,6 +240,10 @@ class PipedriveClient:
         stages = self.request("GET", "stages") or []
         return stages if isinstance(stages, list) else []
 
+    def load_pipelines(self) -> list[dict[str, Any]]:
+        pipelines = self.request("GET", "pipelines") or []
+        return pipelines if isinstance(pipelines, list) else []
+
     def load_users(self) -> list[dict[str, Any]]:
         users = self.request("GET", "users") or []
         return users if isinstance(users, list) else []
@@ -249,12 +274,33 @@ class PipedriveClient:
 
             self.logger.info("Loaded %s %s fields from Pipedrive", len(fields), entity)
 
+        target_pipeline_name = os.getenv("PIPEDRIVE_PIPELINE_NAME", "CAMILLE - PME-KMU").strip()
+        target_pipeline = next(
+            (
+                pipeline
+                for pipeline in self.load_pipelines()
+                if normalize_name(str(pipeline.get("name", ""))) == normalize_name(target_pipeline_name)
+            ),
+            None,
+        )
+        if not target_pipeline or target_pipeline.get("id") is None:
+            raise ImporterError(f"Pipedrive pipeline not found: {target_pipeline_name}")
+        target_pipeline_id = int(target_pipeline["id"])
+
         stages = {}
+        target_stages = []
         for stage in self.load_stages():
+            if int(stage.get("pipeline_id") or 0) != target_pipeline_id:
+                continue
             name = stage.get("name")
             stage_id = stage.get("id")
             if name and stage_id is not None:
                 stages[normalize_name(name)] = int(stage_id)
+                target_stages.append(stage)
+        if not target_stages:
+            raise ImporterError(f"Pipedrive pipeline has no stages: {target_pipeline_name}")
+        target_stages.sort(key=lambda stage: (int(stage.get("order_nr") or 0), int(stage["id"])))
+        default_stage_id = int(target_stages[0]["id"])
 
         users = {}
         for user in self.load_users():
@@ -270,37 +316,85 @@ class PipedriveClient:
             if first_name and last_name:
                 users[normalize_name(f"{first_name} {last_name}")] = int(user_id)
 
-        self.logger.info("Loaded %s stages and %s user lookup entries", len(stages), len(users))
+        self.logger.info(
+            "Using pipeline %r (ID %s) with %s stages; loaded %s user lookup entries",
+            target_pipeline_name,
+            target_pipeline_id,
+            len(stages),
+            len(users),
+        )
         return PipedriveMetadata(
             field_lookup=field_lookup,
             field_options=field_options,
             stages=stages,
             users=users,
+            target_pipeline_id=target_pipeline_id,
+            default_stage_id=default_stage_id,
+            target_pipeline_name=target_pipeline_name,
         )
 
     def search_organization_by_name(self, name: str) -> dict[str, Any] | None:
-        data = self.request(
-            "GET",
-            "organizations/search",
-            params={"term": name, "fields": "name", "exact_match": 1},
-        )
-        return first_search_item(data)
+        return self.search_entity_exact("organizations", "name", name)
 
     def search_person_by_email(self, email: str) -> dict[str, Any] | None:
-        data = self.request(
-            "GET",
-            "persons/search",
-            params={"term": email, "fields": "email", "exact_match": 1},
-        )
-        return first_search_item(data)
+        return self.search_entity_exact("persons", "email", email)
 
     def search_person_by_name(self, name: str) -> dict[str, Any] | None:
+        return self.search_entity_exact("persons", "name", name)
+
+    def search_entity_exact(self, endpoint: str, field: str, value: str) -> dict[str, Any] | None:
+        search_term = value[:100]
         data = self.request(
             "GET",
-            "persons/search",
-            params={"term": name, "fields": "name", "exact_match": 1},
+            f"{endpoint}/search",
+            params={
+                "term": search_term,
+                "fields": field,
+                "exact_match": int(len(value) <= 100),
+            },
         )
-        return first_search_item(data)
+        expected = normalize_name(value)
+        for result in (data or {}).get("items") or []:
+            item = result.get("item") or result
+            if not isinstance(item, dict):
+                continue
+            if field == "email":
+                candidate = item.get("email", item.get("emails", item.get("primary_email")))
+            else:
+                candidate = item.get(field)
+            if field in {"email", "phone"} and isinstance(candidate, list):
+                candidate_values = [entry.get("value") if isinstance(entry, dict) else entry for entry in candidate]
+            else:
+                candidate_values = [candidate]
+            if any(candidate is not None and normalize_name(str(candidate)) == expected for candidate in candidate_values):
+                return item
+        return None
+
+    def search_deal(self, title: str, org_id: int | None, person_id: int | None) -> dict[str, Any] | None:
+        # Pipedrive rejects search terms longer than 100 characters. A prefix
+        # search followed by exact local comparison preserves idempotency.
+        search_term = title[:100]
+        data = self.request(
+            "GET",
+            "deals/search",
+            params={
+                "term": search_term,
+                "fields": "title",
+                "exact_match": int(len(title) <= 100),
+            },
+        )
+        for result in (data or {}).get("items") or []:
+            item = result.get("item") or result
+            if not isinstance(item, dict) or normalize_name(str(item.get("title", ""))) != normalize_name(title):
+                continue
+            existing_org_id = extract_reference_id(item.get("organization", item.get("org_id")))
+            existing_person_id = extract_reference_id(item.get("person", item.get("person_id")))
+            if org_id and existing_org_id != org_id:
+                continue
+            if person_id and existing_person_id != person_id:
+                continue
+            return item
+        return None
 
     def create_entity(self, entity: str, payload: dict[str, Any]) -> dict[str, Any]:
         return self.request("POST", ENTITY_ENDPOINTS[entity], json=payload)
@@ -323,6 +417,12 @@ def extract_entity_id(entity: dict[str, Any] | None) -> int | None:
     value = entity.get("id")
     if isinstance(value, dict):
         value = value.get("value")
+    return int(value) if value is not None else None
+
+
+def extract_reference_id(value: Any) -> int | None:
+    if isinstance(value, dict):
+        value = value.get("id", value.get("value"))
     return int(value) if value is not None else None
 
 
@@ -374,12 +474,21 @@ def resolve_pipedrive_value(
     if metadata is None:
         return value
 
+    if field_key == "email" and not EMAIL_RE.fullmatch(str(value)):
+        stats.skipped_fields.add(f"{entity}: invalid {field_name} value")
+        logger.warning("Skipping invalid email value in %s", field_name)
+        return None
+
     if field_key == "stage_id":
         stage_id = find_lookup_value(metadata.stages, value)
         if stage_id is None:
             stats.skipped_fields.add(f"{entity}: {field_name} value {value}")
-            logger.warning("Skipping stage value %r because no matching Pipedrive stage was found", value)
-            return None
+            logger.warning(
+                "Stage %r was not found in pipeline %r; using its first stage",
+                value,
+                metadata.target_pipeline_name,
+            )
+            return metadata.default_stage_id
         return stage_id
 
     if field_key == "owner_id":
@@ -597,7 +706,7 @@ def create_deal(
     person_id: int | None,
     dry_run: bool,
     logger: logging.Logger,
-) -> bool:
+) -> tuple[int | None, str]:
     if org_id:
         payload = {**payload, "org_id": org_id}
     if person_id:
@@ -605,15 +714,20 @@ def create_deal(
 
     if not payload.get("title"):
         logger.info("Skipping deal because no title was mapped")
-        return False
+        return None, "skipped"
 
     if dry_run:
         logger.info("[dry-run] Would create deal: %s", payload)
-        return True
+        return None, "created"
 
     assert client is not None
-    client.create_entity("deal", payload)
-    return True
+    existing = client.search_deal(str(payload["title"]), org_id, person_id)
+    if existing:
+        existing_id = extract_entity_id(existing)
+        logger.info("Skipping existing deal %r (ID %s)", payload["title"], existing_id)
+        return existing_id, "skipped"
+    created = client.create_entity("deal", payload)
+    return extract_entity_id(created), "created"
 
 
 def process_row(
@@ -627,20 +741,32 @@ def process_row(
     logger: logging.Logger,
 ) -> None:
     mapped = map_row(row, field_lookup, metadata, stats, logger)
+    if metadata is not None:
+        mapped["deal"]["pipeline_id"] = metadata.target_pipeline_id
+        mapped["deal"].setdefault("stage_id", metadata.default_stage_id)
     org_id, org_action = upsert_organization(client, mapped["organization"], dry_run, logger)
     if org_action == "created":
         stats.organizations_created += 1
+        if org_id is not None:
+            stats.created_organization_ids.append(org_id)
     elif org_action == "updated":
         stats.organizations_updated += 1
 
     person_id, person_action = upsert_person(client, mapped["person"], org_id, dry_run, logger)
     if person_action == "created":
         stats.persons_created += 1
+        if person_id is not None:
+            stats.created_person_ids.append(person_id)
     elif person_action == "updated":
         stats.persons_updated += 1
 
-    if create_deal(client, mapped["deal"], org_id, person_id, dry_run, logger):
+    deal_id, deal_action = create_deal(client, mapped["deal"], org_id, person_id, dry_run, logger)
+    if deal_action == "created":
         stats.deals_created += 1
+        if deal_id is not None:
+            stats.created_deal_ids.append(deal_id)
+    else:
+        stats.deals_skipped += 1
 
     logger.info("Processed row %s", row_number)
 
