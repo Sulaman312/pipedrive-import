@@ -33,7 +33,7 @@ def create_app() -> Flask:
 
 
 def _require_login():
-    if request.endpoint in {"auth.login", "login"}:
+    if request.endpoint in {"auth.login", "login", "webhooks.pipedrive_webhook"}:
         return None
     if not auth_service.is_configured():
         if request.endpoint not in {"transformations.index", "index"}:
